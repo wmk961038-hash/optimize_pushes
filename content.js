@@ -1,79 +1,107 @@
-// --- content.js (B站页面的终极执行者) ---
+// content.js - 更稳健的选择器与信息解析（兼容 a 内部为 h3.title 的结构）
 
 console.log('Bilibili 推荐训练师 "卧底" 已就位！');
 
-// 1. 设置一个“对讲机”，随时监听来自 popup.js 的指令
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-  
-  // 2. 检查收到的指令是不是我们想要的“行动代号”
   if (request.action === "startTraining") {
     console.log("收到行动指令！");
     console.log("关键词:", request.keyword);
     console.log("目标数量:", request.quantity);
-
-    // 3. 立即开始执行“刷视频”这个核心任务
-    //    我们把关键词和数量交给这个任务函数去处理
     startBrushingVideos(request.keyword, request.quantity);
   }
 });
 
-// 4. 这是核心任务函数：刷视频
+function normalizeHref(href) {
+  if (!href) return null;
+  href = href.trim();
+  if (href.startsWith('//')) return 'https:' + href;
+  if (href.startsWith('/')) return 'https://www.bilibili.com' + href;
+  if (href.startsWith('http://') || href.startsWith('https://')) return href;
+  // 相对路径或其它，尝试拼接当前站点
+  return 'https://www.bilibili.com/' + href;
+}
+
 async function startBrushingVideos(keyword, quantity) {
-  
-  // 5. 在当前页面上“扫描”，找到所有视频卡片
-  //    '.bili-video-card' 是 B 站用来包裹每个视频推荐项的“容器”的类名
-  const videoCards = document.querySelectorAll('.bili-video-card');
+  const videoCards = Array.from(document.querySelectorAll('.bili-video-card'));
   console.log(`在页面上扫描到 ${videoCards.length} 个视频卡片。`);
 
-  // 6. 创建一个空列表，用来存放所有符合条件的视频链接
+  if (videoCards.length === 0) {
+    console.log("未发现任何 .bili-video-card，页面可能尚未渲染完成或选择器错误。");
+    return;
+  }
+
   const targetVideos = [];
 
-  // 7. 挨个检查每个视频卡片，看它是否符合我们的“关键词”要求
-  for (const card of videoCards) {
-const titleElement = card.querySelector('.bili-video-card__info--title'); // 找到标题元素 (已更新为最新的选择器)    
-    // 确保找到了标题，并且标题里包含我们的关键词
-    if (titleElement && titleElement.innerText.toLowerCase().includes(keyword.toLowerCase())) {
-      const linkElement = card.querySelector('a'); // 找到这个卡片的链接
-      if (linkElement) {
-        targetVideos.push(linkElement.href); // 把链接地址放进我们的列表
+  for (const [index, card] of videoCards.entries()) {
+    try {
+      const anchors = Array.from(card.querySelectorAll('a'));
+      // 取第一个有效链接优先
+      const linkElement = anchors.find(a => a.getAttribute('href')) || anchors[0] || null;
+      if (!linkElement) {
+        console.log(`[card ${index}] 未找到 <a> 元素，跳过`);
+        continue;
       }
+
+      // 尝试多种方式获取标题：h3.titleAttr -> h3.textContent -> a.title -> a.textContent
+      let title = null;
+      const h3 = linkElement.querySelector('h3') || card.querySelector('h3');
+      if (h3) {
+        title = h3.getAttribute('title') || (h3.textContent || '').trim();
+        if (title) {
+          // debug: 标明来源
+          // console.log(`[card ${index}] 标题来自 h3：`, title);
+        }
+      }
+
+      if (!title) {
+        title = linkElement.getAttribute('title') || (linkElement.textContent || '').trim();
+        // console.log(`[card ${index}] 标题来自 a：`, title);
+      }
+
+      const rawHref = linkElement.getAttribute('href');
+      const fullHref = normalizeHref(rawHref);
+
+      if (!title || !fullHref) {
+        console.log(`[card ${index}] 无法解析 title 或 href，title=${title}, href=${rawHref}`);
+        continue;
+      }
+
+      // 匹配关键词（不区分大小写）
+      if (title.toLowerCase().includes(keyword.toLowerCase())) {
+        if (!targetVideos.includes(fullHref)) {
+          targetVideos.push(fullHref);
+          console.log(`[card ${index}] 命中：`, title, fullHref);
+        }
+      } else {
+        // 可选的详细日志：
+        // console.log(`[card ${index}] 未命中：`, title);
+      }
+
+    } catch (e) {
+      console.error('解析单个 card 时出错：', e);
     }
   }
 
   console.log(`筛选出 ${targetVideos.length} 个符合关键词的视频。`);
-  
-  // 如果一个都没找到，就提前收工
+
   if (targetVideos.length === 0) {
-    console.log("任务结束：未找到相关视频。");
+    console.log("任务结束：未找到相关视频。请把控制台的 card 检查输出贴给我，我会继续调整选择器。");
     return;
   }
 
-  // 8. 确定最终要“刷”的视频数量
-  //    取“用户想要的数量”和“我们实际找到的数量”中，较小的那一个
   const videosToBrush = targetVideos.slice(0, quantity);
   console.log(`准备处理 ${videosToBrush.length} 个视频。`);
 
-  // 9. 循环“刷”每一个视频
   for (let i = 0; i < videosToBrush.length; i++) {
     const videoUrl = videosToBrush[i];
     console.log(`[${i + 1}/${videosToBrush.length}] 正在处理: ${videoUrl}`);
-
     try {
-      // 10. “悄悄地”访问这个视频链接
-      //     我们用 fetch 发送一个请求，这就像在后台打开了页面，但用户看不到
-      //     这比真的打开一个新标签页要安静得多，不打扰用户
-      await fetch(videoUrl, { signal: AbortSignal.timeout(9000) }); // 设置9秒超时
-      console.log(` -> 访问成功，B站后台可能已记录。`);
-
+      await fetch(videoUrl, { signal: AbortSignal.timeout(9000) });
+      console.log(` -> 访问成功`);
     } catch (error) {
-      // 如果 fetch 出错（比如超时），我们就在控制台打印一个日志
-      if (error.name === 'TimeoutError') {
-        console.log(' -> 访问超时（9秒），但这没关系，我们已经发出了请求。继续下一个。');
-      } else {
-        console.error(` -> 访问失败:`, error);
-      }
+      console.log(` -> 访问超时或失败: ${error && error.message ? error.message : error}`);
     }
   }
 
-  console.log("所有任务处理完毕！");
+  console.log("🎉 所有任务处理完毕！🎉");
 }
