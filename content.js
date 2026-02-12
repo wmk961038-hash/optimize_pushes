@@ -30,8 +30,7 @@ async function startBrushingVideos(keyword, quantity) {
 
   // 7. 挨个检查每个视频卡片，看它是否符合我们的“关键词”要求
   for (const card of videoCards) {
-    const titleElement = card.querySelector('.bili-video-card__info--tit'); // 找到标题元素
-    
+const titleElement = card.querySelector('.bili-video-card__info--title'); // 找到标题元素 (已更新为最新的选择器)    
     // 确保找到了标题，并且标题里包含我们的关键词
     if (titleElement && titleElement.innerText.toLowerCase().includes(keyword.toLowerCase())) {
       const linkElement = card.querySelector('a'); // 找到这个卡片的链接
